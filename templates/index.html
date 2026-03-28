@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X-Ray Fracture Detection AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); }
+        body { background: radial-gradient(circle at top left, #1e1b4b, #0f172a); }
+    </style>
+</head>
+<body class="text-slate-200 min-h-screen flex items-center justify-center p-6">
+
+    <div class="max-w-2xl w-full glass rounded-[2rem] shadow-2xl border border-slate-700/50 overflow-hidden relative">
+        <div id="main-interface" class="relative z-10 p-10">
+             <div class="p-8 text-center bg-slate-800/40 border-b border-slate-700/50 rounded-t-[2rem] -mx-10 -mt-10 mb-10">
+                <h1 class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-rose-500 italic">
+                    FRACTURE.AI
+                </h1>
+                <p class="text-slate-400 mt-2 text-sm tracking-widest uppercase font-medium">Hybrid Deep Learning Diagnostic Tool</p>
+            </div>
+
+            <div id="drop-zone" class="relative group border-2 border-dashed border-slate-600 rounded-3xl p-12 text-center hover:border-pink-500 hover:bg-slate-800/50 transition-all cursor-pointer">
+                <input type="file" id="fileInput" class="hidden" accept="image/*">
+                
+                <div id="upload-prompt">
+                    <div class="w-20 h-20 bg-slate-700 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+                        <i class="fas fa-cloud-upload-alt text-3xl text-pink-400"></i>
+                    </div>
+                    <p class="text-lg font-semibold text-slate-300">Upload Bone X-Ray</p>
+                    <p class="text-sm text-slate-500 mt-1">Drag & Drop or click to browse</p>
+                </div>
+
+                <img id="preview" class="hidden max-h-64 mx-auto rounded-xl shadow-lg border border-slate-600">
+            </div>
+
+            <button onclick="startAnalysis()" id="actionBtn" class="hidden w-full mt-8 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 py-4 rounded-2xl font-bold text-lg shadow-xl shadow-pink-900/20 transform active:scale-95 transition-all uppercase tracking-widest">
+                Analyze Image
+            </button>
+
+            <div id="loader" class="hidden mt-8 text-center">
+                <div class="inline-block animate-spin w-10 h-10 border-4 border-pink-500 border-t-transparent rounded-full mb-4"></div>
+                <p class="text-slate-400 animate-pulse">Running CNN-ViT-Mamba Hybrid Scan...</p>
+            </div>
+
+            <div id="resultCard" class="hidden mt-10 p-6 rounded-3xl border-l-8 transition-all">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h4 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-1">Diagnosis Result</h4>
+                        <p id="resTitle" class="text-4xl font-black"></p>
+                    </div>
+                    <div class="text-right">
+                        <span id="resConf" class="text-2xl font-mono font-bold text-pink-400">0%</span>
+                        <p class="text-[10px] text-slate-500 uppercase">Confidence</p>
+                    </div>
+                </div>
+                
+                <div class="w-full bg-slate-900/50 rounded-full h-3 mt-6">
+                    <div id="resBar" class="h-full rounded-full transition-all duration-1000" style="width: 0%"></div>
+                </div>
+                <p id="resMsg" class="mt-4 text-sm text-slate-400 italic"></p>
+            </div>
+
+        </div>
+
+        <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-900/90 z-20 flex items-center justify-center">
+             <div id="loader-overlay-content" class="text-center">
+                <div class="inline-block animate-spin w-16 h-16 border-8 border-pink-500 border-t-transparent rounded-full mb-8"></div>
+                <p class="text-2xl text-slate-300 font-bold animate-pulse">Analyzing Hybrid Model Scan...</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('fileInput');
+        const preview = document.getElementById('preview');
+        const uploadPrompt = document.getElementById('upload-prompt');
+        const actionBtn = document.getElementById('actionBtn');
+        const resultCard = document.getElementById('resultCard');
+
+        dropZone.onclick = () => fileInput.click();
+
+        fileInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    preview.src = reader.result;
+                    preview.classList.remove('hidden');
+                    uploadPrompt.classList.add('hidden');
+                    actionBtn.classList.remove('hidden');
+                    resultCard.classList.add('hidden'); // Reset result
+                }
+                reader.readAsDataURL(file);
+            }
+        };
+
+        async function startAnalysis() {
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // UI Reset: Hide Action button, Show Loading Overlay
+            actionBtn.classList.add('hidden');
+            resultCard.classList.add('hidden');
+            document.getElementById('main-interface').classList.add('opacity-30'); // Dims main UI
+            document.getElementById('loading-overlay').classList.remove('hidden');
+
+            try {
+                const response = await fetch('/predict', { method: 'POST', body: formData });
+                const data = await response.json();
+
+                // Clear overlays
+                document.getElementById('loading-overlay').classList.add('hidden');
+                document.getElementById('main-interface').classList.remove('opacity-30');
+
+                const title = document.getElementById('resTitle');
+                const bar = document.getElementById('resBar');
+                const msg = document.getElementById('resMsg');
+                const confText = document.getElementById('resConf');
+
+                confText.innerText = data.confidence + "%";
+                bar.style.width = data.confidence + "%";
+
+                if (data.status === 'success') {
+                    // Clinical logic: 100% confidence on non-medical image is suspicious.
+                    // We flag it but show the prediction with a suspect-flag style
+                    if (data.confidence === 100 && file.name.toLowerCase().includes('.png') && (file.type.startsWith('image/') && !file.name.toLowerCase().includes('xray'))) {
+                        // Special Flagging for perfect prediction on suspicious image types/names
+                        resultCard.classList.remove('hidden');
+                        title.innerText = "Diagnosis (Suspect Flag)";
+                        title.className = "text-4xl font-black text-amber-500";
+                        confText.className = "text-2xl font-mono font-bold text-amber-500";
+                        msg.innerText = "System has high confidence but flags the input image type as unusual for medical diagnostic scanning. Clinical interpretation is strongly advised.";
+                        resultCard.style.borderColor = "#f59e0b"; // amber-500
+                        bar.style.backgroundColor = "#f59e0b"; // amber-500
+                        bar.className = "h-full rounded-full animate-pulse transition-all duration-1000"; // Added animation
+                    } else {
+                        // Standard Clinical Result Presentation
+                        resultCard.classList.remove('hidden');
+                        title.innerText = data.prediction;
+                        msg.innerText = "Diagnosis complete. Clinical interpretation required. Consult a radiologist for confirmation.";
+                        if (data.prediction === 'Normal') {
+                            title.className = "text-4xl font-black text-green-400";
+                            resultCard.style.borderColor = "#4ade80";
+                            bar.style.backgroundColor = "#4ade80";
+                        } else {
+                            title.className = "text-4xl font-black text-rose-500";
+                            resultCard.style.borderColor = "#f43f5e";
+                            bar.style.backgroundColor = "#f43f5e";
+                        }
+                    }
+                } else if (data.status === 'invalid') {
+                    // Show Invalid Input Error with UI
+                    resultCard.classList.remove('hidden');
+                    title.innerText = data.prediction;
+                    title.className = "text-4xl font-black text-orange-400";
+                    confText.className = "text-2xl font-mono font-bold text-orange-400";
+                    msg.innerText = data.message;
+                    resultCard.style.borderColor = "#fb923c"; // orange-400
+                    bar.style.backgroundColor = "#fb923c"; // orange-400
+                }
+
+            } catch (err) {
+                alert("Critical System Error! Refresh and try again.");
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>

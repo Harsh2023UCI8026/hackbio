@@ -1,28 +1,23 @@
-import os
+import streamlit as st
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
-from flask import Flask, render_template, request, jsonify
 from PIL import Image
 import numpy as np
-import io
+import os
 
-app = Flask(__name__)
+# --- Page Configuration ---
+st.set_page_config(page_title="Fracture.AI", page_icon="🦴")
 
-# --- Force Device to CPU for Stability on Local PC ---
-device = torch.device("cpu")
-
-# --- Model Architecture (CNN + ViT + Mamba Hybrid) ---
-
+# --- Model Architecture (Same as your training) ---
 class CNNBackbone(nn.Module):
     def __init__(self):
         super().__init__()
         resnet = models.resnet50(weights=None) 
         self.features = nn.Sequential(*list(resnet.children())[:-1])
     def forward(self, x):
-        x = self.features(x)
-        return torch.flatten(x, 1)
+        return torch.flatten(self.features(x), 1)
 
 class VisionMamba(nn.Module):
     def __init__(self):
@@ -47,118 +42,58 @@ class HybridModel(nn.Module):
         self.mamba = VisionMamba()
         self.classifier = nn.Sequential(
             nn.Linear(2048+768, 512), nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 256), nn.ReLU(),
-            nn.Linear(256, num_classes)
+            nn.Dropout(0.3), nn.Linear(512, 256), nn.ReLU(), nn.Linear(256, num_classes)
         )
     def forward(self, x):
         cnn_feat = self.cnn(x)
         vit_feat = self.vit(x)
         vit_feat = self.mamba(vit_feat)
-        x = torch.cat([cnn_feat, vit_feat], dim=1)
-        return self.classifier(x)
+        return self.classifier(torch.cat([cnn_feat, vit_feat], dim=1))
 
-# --- Initialize and Load Model with Error Handling ---
-num_classes = 2 
-model = HybridModel(num_classes)
-
-MODEL_PATH = "fracture_model.pth"
-
-if os.path.exists(MODEL_PATH):
-    try:
-        checkpoint = torch.load(MODEL_PATH, map_location=device)
+# --- Load Model Function ---
+@st.cache_resource
+def load_model():
+    model = HybridModel(num_classes=2)
+    MODEL_PATH = "fracture_model.pth"
+    if os.path.exists(MODEL_PATH):
+        # Streamlit cloud uses CPU by default
+        checkpoint = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
         model.load_state_dict(checkpoint)
-        model.to(device)
         model.eval()
-        print("✅ Success: Model loaded to CPU perfectly!")
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-else:
-    print(f"❌ Error: {MODEL_PATH} not found in current directory!")
+        return model
+    return None
 
-# Transformation
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-])
+model = load_model()
 
-def is_valid_xray_image(pil_img):
-    """
-    Checks if a PIL image is grayscale and looks like an X-ray histogram-wise.
-    Real-world X-rays have a specific grayscale distribution. Desktop screenshots don't.
-    """
-    # 1. Grayscale check
-    grayscale_img = pil_img.convert('L')
-    img_np = np.array(grayscale_img)
+# --- UI ---
+st.title("🦴 Fracture.AI")
+st.write("Upload an X-ray image to detect fractures.")
+
+uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    image = Image.open(uploaded_file).convert('RGB')
+    st.image(image, caption='Uploaded Image', use_container_width=True)
     
-    # Simple check for color variety that X-rays don't have. Desktop screenshots do.
-    # We compare the grayscale version vs. original colors (if original was color)
-    if pil_img.mode != 'L':
-        original_np = np.array(pil_img)
-        # If mean diff between RGB and L is high, it's colored
-        color_diff = np.mean(original_np) - np.mean(grayscale_img)
-        if abs(color_diff) > 20: # Colored images are definitely not X-rays
-            return False, "Image is colored. X-rays are grayscale."
-            
-    # 2. Basic Gray-Histogram check: Real X-rays have a narrow-ish peak and long tail.
-    # Desktop screenshots have wild distributions with multiple peaks.
-    hist, _ = np.histogram(img_np.flatten(), 256, [0, 256])
-    peak_count = np.sum(hist > (img_np.size / 50)) # How many gray levels have substantial pixels
-    if peak_count > 30: # If too many gray levels are heavily represented, it's not a standard X-ray.
-        return False, "Grayscale distribution is too wide for a standard X-ray."
-
-    return True, "Valid grayscale X-ray candidate."
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    if 'file' not in request.files:
-        return jsonify({'status': 'error', 'message': 'No file uploaded'})
-    
-    file = request.files['file']
-    try:
-        img_bytes = file.read()
-        img = Image.open(io.BytesIO(img_bytes))
-        
-        # --- Pre-Validation Step ---
-        is_valid, validation_message = is_valid_xray_image(img)
-        if not is_valid:
-             return jsonify({
-                'status': 'invalid',
-                'prediction': 'Invalid Input',
-                'message': f"Prediction aborted. {validation_message} Please upload a clear Bone X-ray image.",
-                'confidence': 0.0
-            })
-
-        # Preprocess
-        input_tensor = transform(img.convert('RGB')).unsqueeze(0).to(device)
+    if st.button('Analyze'):
+        # Transform
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+        img_tensor = transform(image).unsqueeze(0)
         
         with torch.no_grad():
-            output = model(input_tensor)
+            output = model(img_tensor)
             prob = torch.softmax(output, dim=1)
-            confidence, pred = torch.max(prob, 1)
+            conf, pred = torch.max(prob, 1)
         
-        conf_score = round(confidence.item() * 100, 2)
         classes = ['Fractured', 'Normal']
-        
         result = classes[pred.item()]
-
-        # UI level Suspect Detection: Aclinical model being 100% confident on a desktop screenshot is suspect.
-        # This part should be handled in the frontend UI based on the response structure.
-        return jsonify({
-            'status': 'success',
-            'prediction': result,
-            'confidence': conf_score,
-            'prediction_status': 'processed' # Added status field to help frontend
-        })
-
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)})
-
-if __name__ == '__main__':
-    print("🚀 Fracture AI Server Starting...")
-    app.run(debug=True, port=5000)
+        confidence = conf.item() * 100
+        
+        if result == 'Fractured':
+            st.error(f"Prediction: {result} ({confidence:.2f}%)")
+        else:
+            st.success(f"Prediction: {result} ({confidence:.2f}%)")

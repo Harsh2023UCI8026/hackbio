@@ -6,11 +6,25 @@ import torchvision.transforms as transforms
 from PIL import Image
 import numpy as np
 import os
+import time
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Fracture.AI", page_icon="🦴")
+# --- Page Config ---
+st.set_page_config(
+    page_title="Fracture.AI | Bone Diagnostic Tool",
+    page_icon="🦴",
+    layout="centered"
+)
 
-# --- Model Architecture (Same as your training) ---
+# --- CSS for Better UI ---
+st.markdown("""
+    <style>
+    .main { background-color: #0f172a; }
+    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background-image: linear-gradient(to right, #ec4899, #f43f5e); color: white; border: none; }
+    .stAlert { border-radius: 15px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- Model Architecture ---
 class CNNBackbone(nn.Module):
     def __init__(self):
         super().__init__()
@@ -50,50 +64,111 @@ class HybridModel(nn.Module):
         vit_feat = self.mamba(vit_feat)
         return self.classifier(torch.cat([cnn_feat, vit_feat], dim=1))
 
-# --- Load Model Function ---
+# --- Load Model with Cache ---
 @st.cache_resource
-def load_model():
+def load_my_model():
     model = HybridModel(num_classes=2)
     MODEL_PATH = "fracture_model.pth"
     if os.path.exists(MODEL_PATH):
-        # Streamlit cloud uses CPU by default
-        checkpoint = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
-        model.load_state_dict(checkpoint)
-        model.eval()
-        return model
+        try:
+            checkpoint = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
+            model.load_state_dict(checkpoint)
+            model.eval()
+            return model
+        except Exception as e:
+            st.error(f"Error loading model weights: {e}")
     return None
 
-model = load_model()
+model = load_my_model()
 
-# --- UI ---
+# --- Advanced Pre-validation Logic ---
+def is_valid_xray(img):
+    img_gray = img.convert('L')
+    img_np = np.array(img_gray)
+    # Histogram analysis
+    hist, _ = np.histogram(img_np.flatten(), 256, [0, 256])
+    peak_count = np.sum(hist > (img_np.size / 50))
+    
+    # Color check
+    if img.mode != 'L' and img.mode != '1':
+        color_diff = np.mean(np.array(img)) - np.mean(img_np)
+        if abs(color_diff) > 15: return False, "Image contains colors. X-rays should be grayscale."
+        
+    if peak_count > 38: 
+        return False, "Complex texture detected. Please upload a clear bone X-ray scan."
+        
+    return True, "Valid"
+
+# --- Sidebar ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2869/2869376.png", width=100)
+    st.title("About Project")
+    st.info("Fracture.AI uses a Hybrid CNN-ViT-Mamba architecture to analyze bone scans with high precision.")
+    st.divider()
+    st.write("📊 **Model Info:**")
+    st.write("- Backbone: ResNet50")
+    st.write("- Encoder: ViT-B16")
+    st.write("- Logic: Mamba Layer")
+
+# --- Main UI ---
 st.title("🦴 Fracture.AI")
-st.write("Upload an X-ray image to detect fractures.")
+st.subheader("Hybrid Deep Learning Diagnostic Tool")
 
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+if model is None:
+    st.warning("⚠️ Model file 'fracture_model.pth' not found. Please upload it to your GitHub repo.")
+    st.stop()
+
+uploaded_file = st.file_uploader("Upload Bone X-ray (PNG/JPG)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert('RGB')
-    st.image(image, caption='Uploaded Image', use_container_width=True)
+    image = Image.open(uploaded_file)
     
-    if st.button('Analyze'):
-        # Transform
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-        img_tensor = transform(image).unsqueeze(0)
-        
-        with torch.no_grad():
-            output = model(img_tensor)
-            prob = torch.softmax(output, dim=1)
-            conf, pred = torch.max(prob, 1)
-        
-        classes = ['Fractured', 'Normal']
-        result = classes[pred.item()]
-        confidence = conf.item() * 100
-        
-        if result == 'Fractured':
-            st.error(f"Prediction: {result} ({confidence:.2f}%)")
-        else:
-            st.success(f"Prediction: {result} ({confidence:.2f}%)")
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.image(image, caption='Uploaded Scan', use_container_width=True)
+    
+    with col2:
+        st.write("### Analysis Dashboard")
+        if st.button('🚀 Start AI Scan'):
+            valid, msg = is_valid_xray(image)
+            
+            if not valid:
+                st.error(f"**Invalid Input:** {msg}")
+            else:
+                with st.spinner('Neural Networks Processing...'):
+                    time.sleep(1.5) # Aesthetic delay
+                    
+                    # Transform
+                    transform = transforms.Compose([
+                        transforms.Resize((224, 224)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+                    ])
+                    img_tensor = transform(image.convert('RGB')).unsqueeze(0)
+                    
+                    with torch.no_grad():
+                        output = model(img_tensor)
+                        prob = torch.softmax(output, dim=1)
+                        conf, pred = torch.max(prob, 1)
+                    
+                    confidence = conf.item() * 100
+                    result = "Fractured" if pred.item() == 0 else "Normal"
+                    
+                    # Display Result
+                    if result == "Fractured":
+                        st.markdown(f"<h2 style='color: #f43f5e;'>Result: {result}</h2>", unsafe_allow_html=True)
+                        st.progress(confidence/100)
+                    else:
+                        st.markdown(f"<h2 style='color: #4ade80;'>Result: {result}</h2>", unsafe_allow_html=True)
+                        st.progress(confidence/100)
+                        
+                    st.write(f"**Confidence Score:** {confidence:.2f}%")
+                    
+                    if confidence > 95:
+                        st.success("High confidence prediction.")
+                    elif confidence < 75:
+                        st.warning("Low confidence. Result may be unreliable.")
+
+st.divider()
+st.caption("⚖️ **Disclaimer:** This tool is for research purposes only. Always consult a certified medical professional for diagnosis.")
